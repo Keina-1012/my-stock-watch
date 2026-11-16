@@ -2,7 +2,7 @@ import re
 import json
 from streamlit_local_storage import LocalStorage
 import html
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
@@ -12,7 +12,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
-st.title('📈 My Stock Watch v0.6')
+st.title('📈 My Stock Watch v0.7')
 st.caption('日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です')
 
 DEFAULT = ['6857.T', '8035.T', '7011.T', '6501.T', 'GOOGL', 'AVGO', 'MSFT', 'VRT', 'NVDA', 'PG']
@@ -177,24 +177,49 @@ with st.sidebar:
             st.rerun()
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             st.error(f'設定を読み込めませんでした: {exc}')
-    if st.button('🔄 データを再取得', use_container_width=True):
+    if st.button('🔄 最新データを取得（キャッシュを消去）', use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_price(symbol):
     ticker = yf.Ticker(symbol)
+    # 長期チャート用の日足と、直近の価格確認用の時間足を分ける。
     hist = ticker.history(period='1y', interval='1d', auto_adjust=True)
-    if hist.empty:
-        raise ValueError('株価データが取得できませんでした')
+    if hist.empty or hist['Close'].dropna().empty:
+        raise ValueError('日足の株価データを取得できませんでした')
     closes = hist['Close'].dropna()
-    if closes.empty:
-        raise ValueError('終値が取得できませんでした')
-    current = float(closes.iloc[-1])
-    previous = float(closes.iloc[-2]) if len(closes) >= 2 else None
-    change = (current / previous - 1) * 100 if previous else None
+    previous_close = float(closes.iloc[-2]) if len(closes) >= 2 else None
+    latest_price = float(closes.iloc[-1])
+    latest_time = closes.index[-1]
+    source = '日足（終値）'
+    try:
+        intraday = ticker.history(period='5d', interval='5m', auto_adjust=True, prepost=False)
+        if not intraday.empty and not intraday['Close'].dropna().empty:
+            recent = intraday['Close'].dropna()
+            intraday_time = recent.index[-1]
+            # 取得した時間足が日足より新しい場合のみ採用。
+            if intraday_time.date() >= latest_time.date():
+                latest_price = float(recent.iloc[-1])
+                latest_time = intraday_time
+                source = '5分足（遅延の可能性あり）'
+    except Exception:
+        pass  # 時間足が取れない場合は日足にフォールバック
+    # 日足最終行が当日なら、前日終値はひとつ前の行。
+    # 時間足の日付が日足最終日より新しい場合は日足最終行が前日終値。
+    if latest_time.date() > closes.index[-1].date():
+        previous_close = float(closes.iloc[-1])
+    change = (latest_price / previous_close - 1) * 100 if previous_close and previous_close > 0 else None
     currency = 'JPY' if symbol.endswith('.T') else 'USD'
-    return hist, current, change, currency, str(closes.index[-1].date())
+    if getattr(latest_time, 'tzinfo', None) is not None:
+        from zoneinfo import ZoneInfo
+        shown_time = latest_time.tz_convert(ZoneInfo('Asia/Tokyo')).strftime('%Y-%m-%d %H:%M JST')
+        age = datetime.now(timezone.utc) - latest_time.to_pydatetime().astimezone(timezone.utc)
+    else:
+        shown_time = latest_time.strftime('%Y-%m-%d') + '（取引日）'
+        age = None
+    stale = age is not None and age > timedelta(days=4)
+    return hist, latest_price, change, currency, shown_time, source, stale
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_news(symbol, limit=6):
@@ -228,15 +253,17 @@ with st.spinner('株価を取得しています…'):
 
 if prices:
     cols = st.columns(min(4, len(prices)))
-    for i, (symbol, (hist, price, change, currency, date)) in enumerate(prices.items()):
+    for i, (symbol, (hist, price, change, currency, date, source, stale)) in enumerate(prices.items()):
         with cols[i % len(cols)]:
             st.metric(f'{display_name(symbol)} ({symbol})', f'{price:,.2f} {currency}', f'{change:+.2f}%' if change is not None else None)
-            st.caption(f'最終取引日: {date}（遅延の可能性あり）')
+            st.caption(f'データ日時: {date} ｜ {source}')
+            if stale:
+                st.warning('データが古い可能性があります')
 
 st.subheader('🔔 株価アラート（閲覧時チェック）')
-st.caption('最新の取得可能な日足終値で判定します。リアルタイム価格ではなく、アプリを閉じている間の通知はありません。')
+st.caption('取得できる最新の価格で判定します（5分足優先・日足にフォールバック）。リアルタイム保証はなく、アプリを閉じている間の通知はありません。')
 with st.expander('アラートを設定・変更する', expanded=False):
-    alert_symbol = st.selectbox('監視する銘柄', symbols, key='alert_symbol')
+    alert_symbol = st.selectbox('監視する銘柄', symbols, key='alert_symbol', format_func=lambda symbol: f'{display_name(symbol)} ({symbol})')
     old_direction, old_target = st.session_state.alerts.get(alert_symbol, ('below', 100.0))
     alert_direction = st.radio('通知条件', ['below', 'above'], index=0 if old_direction == 'below' else 1,
                                format_func=lambda v: '指定価格以下' if v == 'below' else '指定価格以上', horizontal=True)
@@ -268,13 +295,14 @@ for symbol, (direction, target) in st.session_state.alerts.items():
     else:
         st.caption('監視中: ' + message)
 
-selected = st.selectbox('詳細を見る銘柄', symbols)
+selected = st.selectbox('詳細を見る銘柄', symbols, format_func=lambda symbol: f'{display_name(symbol)} ({symbol})')
 if selected in prices:
-    hist, price, change, currency, date = prices[selected]
+    hist, price, change, currency, date, source, stale = prices[selected]
+    st.caption(f'価格データ日時: {date} ｜ {source}')
     period = st.radio('チャート期間', ['1か月','3か月','1年'], horizontal=True)
     days = {'1か月':30,'3か月':90,'1年':365}[period]
     st.line_chart(hist['Close'].tail(days), y_label=f'調整後終値 ({currency})')
-    st.caption('チャートは日足の調整後終値です。現在値やリアルタイム気配値ではありません。')
+    st.caption('チャートは日足の調整後終値です。上部の表示価格とは取得間隔が異なる場合があります。')
 
 st.subheader(f'📰 {display_name(selected)} ({selected}) の関連ニュース')
 try:
