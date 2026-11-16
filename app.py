@@ -1,5 +1,6 @@
 import re
 import json
+from streamlit_local_storage import LocalStorage
 import html
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -11,7 +12,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
-st.title('📈 My Stock Watch')
+st.title('📈 My Stock Watch v0.6')
 st.caption('日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です')
 
 DEFAULT = ['6857.T', '8035.T', '7011.T', '6501.T', 'GOOGL', 'AVGO', 'MSFT', 'VRT', 'NVDA', 'PG']
@@ -40,33 +41,97 @@ def normalize(s):
         return s
     return None
 
-def parse_favorites():
-    raw = st.query_params.get('favorites', '')
-    return [x for x in raw.split(',') if x in DEFAULT]
+# 設定はこのブラウザのlocalStorageに保存します。異なる端末には同期しません。
+STORAGE_KEY = 'my_stock_watch_v06_preferences'
+local_store = LocalStorage()
 
-def parse_alerts():
-    raw = st.query_params.get('alerts', '')
-    result = {}
-    for part in raw.split(','):
+def parse_url_settings():
+    # v0.5のURLからも移行可能
+    favorites = [x for x in st.query_params.get('favorites', '').split(',') if normalize(x) == x]
+    alerts = {}
+    for part in st.query_params.get('alerts', '').split(','):
         try:
             symbol, direction, target = part.split(':')
             target = float(target)
             if normalize(symbol) == symbol and direction in ('above', 'below') and 0 < target < 1e9:
-                result[symbol] = (direction, target)
+                alerts[symbol] = (direction, target)
         except (ValueError, TypeError):
             continue
-    return result
+    return {'symbols': DEFAULT.copy(), 'favorites': favorites, 'alerts': alerts}
+
+def sanitize_settings(value):
+    if not isinstance(value, dict):
+        return None
+    raw_symbols = value.get('symbols', DEFAULT)
+    if not isinstance(raw_symbols, list):
+        raw_symbols = DEFAULT
+    symbols = list(dict.fromkeys(s for s in raw_symbols[:100] if isinstance(s, str) and normalize(s) == s))
+    raw_favs = value.get('favorites', [])
+    favorites = [s for s in raw_favs if isinstance(s, str) and s in symbols] if isinstance(raw_favs, list) else []
+    alerts = {}
+    raw_alerts = value.get('alerts', {})
+    if isinstance(raw_alerts, dict):
+        for symbol, item in raw_alerts.items():
+            try:
+                direction, target = item
+                target = float(target)
+                if symbol in symbols and direction in ('above', 'below') and 0 < target < 1e9:
+                    alerts[symbol] = (direction, target)
+            except (ValueError, TypeError):
+                pass
+    return {'symbols': symbols, 'favorites': favorites, 'alerts': alerts}
+
+def current_settings():
+    return {'symbols': st.session_state.symbols,
+            'favorites': st.session_state.favorites,
+            'alerts': {s: [d, t] for s, (d, t) in st.session_state.alerts.items()}}
 
 def save_preferences():
+    st.session_state.settings_changed = True
+    # localStorageへ保存。URLにもバックアップ情報を残す
+    local_store.setItem(STORAGE_KEY, json.dumps(current_settings(), ensure_ascii=False))
+    st.query_params['symbols'] = ','.join(st.session_state.symbols)
     st.query_params['favorites'] = ','.join(st.session_state.favorites)
-    st.query_params['alerts'] = ','.join(f'{symbol}:{direction}:{target:g}' for symbol, (direction, target) in st.session_state.alerts.items())
+    st.query_params['alerts'] = ','.join(f'{s}:{d}:{t:g}' for s, (d, t) in st.session_state.alerts.items())
 
-if 'symbols' not in st.session_state:
-    st.session_state.symbols = DEFAULT.copy()
-if 'favorites' not in st.session_state:
-    st.session_state.favorites = parse_favorites()
-if 'alerts' not in st.session_state:
-    st.session_state.alerts = parse_alerts()
+def restore_settings(data):
+    st.session_state.symbols = data['symbols']
+    st.session_state.favorites = data['favorites']
+    st.session_state.alerts = data['alerts']
+
+if 'settings_initialized' not in st.session_state:
+    st.session_state.settings_initialized = False
+    st.session_state.settings_changed = False
+    st.session_state.settings_restored = False
+
+# ブラウザ側コンポーネントは初回読み込みで値が遅れて届く場合があります。
+# 値が届く前にデフォルト設定で上書きしないようにします。
+stored = local_store.getItem(STORAGE_KEY)
+if not st.session_state.settings_initialized:
+    restored = None
+    if isinstance(stored, str) and stored.strip():
+        try:
+            restored = sanitize_settings(json.loads(stored))
+        except (ValueError, TypeError):
+            pass
+    if restored is None:
+        restored = parse_url_settings()
+        raw_symbols = st.query_params.get('symbols', '')
+        if raw_symbols:
+            restored['symbols'] = list(dict.fromkeys(s for s in raw_symbols.split(',') if normalize(s) == s))
+            restored['favorites'] = [s for s in restored['favorites'] if s in restored['symbols']]
+            restored['alerts'] = {s: a for s, a in restored['alerts'].items() if s in restored['symbols']}
+    restore_settings(restored)
+    st.session_state.settings_initialized = True
+    st.session_state.settings_restored = restored is not None and isinstance(stored, str) and bool(stored.strip())
+elif not st.session_state.settings_changed and not st.session_state.settings_restored and isinstance(stored, str) and stored.strip():
+    try:
+        data = sanitize_settings(json.loads(stored))
+        if data is not None:
+            restore_settings(data)
+            st.session_state.settings_restored = True
+    except (ValueError, TypeError):
+        pass
 
 with st.sidebar:
     st.header('ウォッチリスト')
@@ -77,6 +142,7 @@ with st.sidebar:
             st.error('銘柄コードの形式を確認してください。')
         elif symbol not in st.session_state.symbols:
             st.session_state.symbols.append(symbol)
+            save_preferences()
             st.rerun()
     for symbol in st.session_state.symbols.copy():
         c1, c2, c3 = st.columns([1, 5, 1])
@@ -96,7 +162,21 @@ with st.sidebar:
             st.session_state.alerts.pop(symbol, None)
             save_preferences()
             st.rerun()
-    st.caption('★を押すとお気に入りに登録。お気に入り・アラートはURLに保存されます。再訪問時はURLをブックマークしてください。')
+    st.caption('設定はこのブラウザに保存します。別の端末には自動同期されません。')
+    st.subheader('💾 設定バックアップ')
+    st.download_button('設定をJSONで保存', json.dumps(current_settings(), ensure_ascii=False, indent=2),
+                       file_name='my_stock_watch_settings.json', mime='application/json', use_container_width=True)
+    uploaded = st.file_uploader('保存した設定を復元', type=['json'])
+    if uploaded is not None and st.button('バックアップを読み込む', use_container_width=True):
+        try:
+            data = sanitize_settings(json.load(uploaded))
+            if data is None:
+                raise ValueError('設定の形式が正しくありません')
+            restore_settings(data)
+            save_preferences()
+            st.rerun()
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            st.error(f'設定を読み込めませんでした: {exc}')
     if st.button('🔄 データを再取得', use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -244,4 +324,5 @@ if news:
             st.divider()
 
 st.divider()
+st.caption('保存に関する注意: ブラウザのデータ削除、シークレットモード、別ブラウザでは設定が引き継がれません。バックアップJSONを保管してください。')
 st.caption('免責事項: 非公式データやRSSの内容には遅延・欠落・誤りがあり得ます。投資助言ではありません。売買前には証券会社や公式IRで確認してください。')
