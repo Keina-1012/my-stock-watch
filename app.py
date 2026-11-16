@@ -1,4 +1,3 @@
-import os
 import re
 import json
 import html
@@ -209,29 +208,40 @@ except Exception as exc:
     news = []
     st.warning(f'ニュースの取得に失敗しました: {exc}')
 
-st.subheader('✨ AIニュース分析（オプション）')
-st.caption('ニュースの見出しだけを使った参考分析です。記事本文の検証や株価変動の因果関係の証明ではありません。')
-api_key = None
-try:
-    api_key = st.secrets.get('OPENAI_API_KEY')
-except Exception:
-    pass
-api_key = api_key or os.environ.get('OPENAI_API_KEY')
-if not api_key:
-    st.info('OpenAI APIキーをサーバーのSecretsに設定するとAI分析を利用できます。キーを画面に入力したり、ソースコードに埋め込んだりしないでください。')
-if st.button('この銘柄のニュースをAIで分析', disabled=not api_key or not news):
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        headlines = '\n'.join(f'- {n["title"]} ({n["published"]}, {n["source"]})' for n in news)
-        response = client.responses.create(
-            model='gpt-4.1-mini',
-            instructions='あなたは慎重な金融ニュース解説者です。与えられた見出しは未検証であり記事本文は読んでいません。日本語で「注目ニュース」「好材料」「悪材料」「不確実性」「確認すべき一次情報」の5見出しに整理してください。各ニュースの発表日を考慮し、推測と事実を区別し、ニュースと株価変動の因果関係を断定せず、売買指示や価格予測をしないでください。見出しだけでは判断できない場合はその旨を明記してください。',
-            input=f'対象銘柄: {display_name(selected)} ({selected})\nニュース見出し:\n{headlines}'
-        )
-        st.markdown(response.output_text)
-    except Exception as exc:
-        st.error(f'AI分析に失敗しました: {exc}')
+st.subheader('💬 ChatGPTでニュースを詳しく調べる')
+st.caption('APIキー・追加のAPI料金は不要です。質問文をコピーしてChatGPTに貼り付けてください。')
+
+company = display_name(selected)
+headlines = "\n".join(
+    f'- {item["title"]}（{item["published"]}、{item["source"]}）\n  URL: {item["link"]}'
+    for item in news
+)
+question = (
+    f'{company}（{selected}）について、以下のニュースを起点に最新情報を調査してください。\n'
+    'ニュースの発表日と出来事の日付を区別し、可能なら企業IRなどの一次情報を優先して出典URLを示してください。\n'
+    '①重要ニュースの要点 ②株価へのプラス材料・マイナス材料 ③まだ不明な点 '
+    '④今後の注目イベント、の順に日本語で解説してください。\n'
+    'ニュースと株価変動の因果関係は断定せず、記事を確認できない場合はその旨を明記してください。\n\n'
+    f'参考ニュース（見出し・URL。内容は未検証）：\n{headlines if headlines else "ニュースを取得できませんでした。企業名から調査してください。"}'
+)
+st.write('**この銘柄のニュースをまとめて分析**')
+st.code(question, language=None)
+st.caption('右上のコピーアイコンで質問文をコピーできます。')
+st.link_button('ChatGPTを開く ↗', 'https://chatgpt.com/', use_container_width=True)
+
+if news:
+    with st.expander('記事を1件ずつ詳しく調べる'):
+        for index, item in enumerate(news):
+            st.markdown(f'**{index + 1}. {item["title"]}**')
+            article_question = (
+                f'{company}（{selected}）に関する次の記事を詳しく調査してください。\n'
+                f'見出し: {item["title"]}\n掲載日時: {item["published"]}\n'
+                f'掲載元: {item["source"]}\nURL: {item["link"]}\n\n'
+                '記事の内容と一次情報を確認できる範囲で調べ、事実・推測を分けて、'
+                '株価への潜在的な影響と注意点を日本語で説明してください。'
+            )
+            st.code(article_question, language=None)
+            st.divider()
 
 st.divider()
 st.caption('免責事項: 非公式データやRSSの内容には遅延・欠落・誤りがあり得ます。投資助言ではありません。売買前には証券会社や公式IRで確認してください。')
