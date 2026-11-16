@@ -1,59 +1,26 @@
-# My Stock Watch — 個人用株価監視アプリ
+# My Stock Watch v0.4
 
-初期登録10社（アドバンテスト、東京エレクトロン、三菱重工業、日立製作所、Alphabet、Broadcom、Microsoft、Vertiv、NVIDIA、Procter & Gamble）に対応し、日本株・米国株の終値、騰落率、日足チャート、関連ニュースを表示するStreamlitアプリです。OpenAI APIキーを設定するとニュース見出しのAI要約も利用できます。
+日本株4社・米国株6社を初期登録した個人用Streamlitアプリ。
 
-## セットアップ
+## 新機能
+- ★ お気に入り銘柄を一覧の上に表示
+- 🔔 株価アラート：取得可能な日足終値をアプリ表示時に確認（プッシュ通知なし）
+- ✨ AIニュース分析：見出しを元に好材料・悪材料・不確実性などを整理（任意）
 
-Python 3.10以降をインストールし、このフォルダで以下を実行します。
+## GitHub上での更新（Android対応）
+GitHubの `app.py` を新しい `app.py` で置き換えてCommitしてください。`requirements.txt` はそのままでも動作します。Streamlit Community Cloudが自動再デプロイします。
 
-```bash
-python -m venv .venv
-```
+## お気に入りとアラートの保存
+お気に入りとアラート設定はURLのクエリパラメータに保存します。設定後のURLをブックマークして再度開くと復元できます。URLを共有すると設定も共有されるため注意してください。銘柄追加・削除はセッション限定です。複数端末間の自動同期はありません。
 
-Windowsの場合:
-
-```powershell
-.venv\Scripts\activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-macOS / Linuxの場合:
-
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-表示される `http://localhost:8501` にPCのブラウザでアクセスします。
-
-## AI機能（任意・API利用料が別途発生）
-
-プロジェクト直下に `.streamlit/secrets.toml` を作成し、以下を記入してください。
+## AI分析の有効化
+Streamlit Community Cloudのアプリ設定 > Secretsに以下を設定します。GitHubや画面上のテキスト欄にキーを貼らないでください。
 
 ```toml
-OPENAI_API_KEY = "ご自身のAPIキー"
+OPENAI_API_KEY = "YOUR_API_KEY"
 ```
 
-**APIキーをGitHubに公開しないでください。** `.gitignore` を同梱しています。公開環境ではStreamlit CloudのSecrets設定を利用します。
+API利用には別途料金がかかります。APIキーがなくても株価・ニュース・お気に入り・アラートは動作します。
 
-## スマホから使うには
-
-Streamlit Community Cloudなどにデプロイすればブラウザからアクセスできます。ただし、公開URLには第三者もアクセスできる可能性があるため、個人情報・保有株数・APIキーを画面やコードに埋め込まないでください。非公開で使いたい場合は認証・アクセス制限を追加してください。
-
-## 現段階の制約
-
-- 株価は日足の調整後終値であり、リアルタイムの約定価格ではありません。
-- データはyfinance経由の非公式データで、取得不能・遅延・利用条件の変更があり得ます。
-- ニュースはGoogleニュースのRSS検索結果です。銘柄コードだけでは無関係な記事が混じる可能性があります。
-- AIは見出しのみを分析します。記事本文を読んだり、ニュースと値動きの因果関係を証明したりしません。
-- ウォッチリストはセッション中のみ保存され、再接続やサーバー再起動後に初期値へ戻ることがあります。
-- データ取得は15分間キャッシュします。「データを再取得」で手動更新できます。
-- 個人学習・情報確認向けの試作品です。投資判断には証券会社や公式IRの情報を確認してください。
-
-## 初期登録銘柄
-
-6857.T / 8035.T / 7011.T / 6501.T / GOOGL / AVGO / MSFT / VRT / NVDA
-
-AlphabetはClass A株（GOOGL）を使用しています。銘柄はサイドバーから追加・削除できます。
+## 重要な注意
+`yfinance` は非公式データで、リアルタイム気配値ではありません。GoogleニュースRSSも記事本文の検証を行いません。アラートは終値ベースで閲覧時のみ判定します。投資判断は証券会社・企業IR等で確認してください。

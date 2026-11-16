@@ -41,8 +41,33 @@ def normalize(s):
         return s
     return None
 
+def parse_favorites():
+    raw = st.query_params.get('favorites', '')
+    return [x for x in raw.split(',') if x in DEFAULT]
+
+def parse_alerts():
+    raw = st.query_params.get('alerts', '')
+    result = {}
+    for part in raw.split(','):
+        try:
+            symbol, direction, target = part.split(':')
+            target = float(target)
+            if normalize(symbol) == symbol and direction in ('above', 'below') and 0 < target < 1e9:
+                result[symbol] = (direction, target)
+        except (ValueError, TypeError):
+            continue
+    return result
+
+def save_preferences():
+    st.query_params['favorites'] = ','.join(st.session_state.favorites)
+    st.query_params['alerts'] = ','.join(f'{symbol}:{direction}:{target:g}' for symbol, (direction, target) in st.session_state.alerts.items())
+
 if 'symbols' not in st.session_state:
     st.session_state.symbols = DEFAULT.copy()
+if 'favorites' not in st.session_state:
+    st.session_state.favorites = parse_favorites()
+if 'alerts' not in st.session_state:
+    st.session_state.alerts = parse_alerts()
 
 with st.sidebar:
     st.header('ウォッチリスト')
@@ -55,12 +80,24 @@ with st.sidebar:
             st.session_state.symbols.append(symbol)
             st.rerun()
     for symbol in st.session_state.symbols.copy():
-        c1, c2 = st.columns([3, 1])
-        c1.write(f'{display_name(symbol)} ({symbol})')
-        if c2.button('✕', key=f'remove_{symbol}'):
-            st.session_state.symbols.remove(symbol)
+        c1, c2, c3 = st.columns([1, 5, 1])
+        favorite = symbol in st.session_state.favorites
+        if c1.button('★' if favorite else '☆', key=f'fav_{symbol}', help='お気に入りを切り替え'):
+            if favorite:
+                st.session_state.favorites.remove(symbol)
+            else:
+                st.session_state.favorites.append(symbol)
+            save_preferences()
             st.rerun()
-    st.caption('日本株は4桁の証券コード、米国株はAAPLなどのティッカーを入力。銘柄はこのセッション中に保持されます。')
+        c2.write(f'{display_name(symbol)} ({symbol})')
+        if c3.button('✕', key=f'remove_{symbol}'):
+            st.session_state.symbols.remove(symbol)
+            if symbol in st.session_state.favorites:
+                st.session_state.favorites.remove(symbol)
+            st.session_state.alerts.pop(symbol, None)
+            save_preferences()
+            st.rerun()
+    st.caption('★を押すとお気に入りに登録。お気に入り・アラートはURLに保存されます。再訪問時はURLをブックマークしてください。')
     if st.button('🔄 データを再取得', use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -97,7 +134,7 @@ def get_news(symbol, limit=6):
         items.append({'title':title, 'link':link, 'published':published, 'source':source.text if source is not None else ''})
     return items
 
-symbols = st.session_state.symbols
+symbols = sorted(st.session_state.symbols, key=lambda symbol: (symbol not in st.session_state.favorites, st.session_state.symbols.index(symbol)))
 if not symbols:
     st.info('サイドバーから銘柄を追加してください。')
     st.stop()
@@ -116,6 +153,41 @@ if prices:
         with cols[i % len(cols)]:
             st.metric(f'{display_name(symbol)} ({symbol})', f'{price:,.2f} {currency}', f'{change:+.2f}%' if change is not None else None)
             st.caption(f'最終取引日: {date}（遅延の可能性あり）')
+
+st.subheader('🔔 株価アラート（閲覧時チェック）')
+st.caption('最新の取得可能な日足終値で判定します。リアルタイム価格ではなく、アプリを閉じている間の通知はありません。')
+with st.expander('アラートを設定・変更する', expanded=False):
+    alert_symbol = st.selectbox('監視する銘柄', symbols, key='alert_symbol')
+    old_direction, old_target = st.session_state.alerts.get(alert_symbol, ('below', 100.0))
+    alert_direction = st.radio('通知条件', ['below', 'above'], index=0 if old_direction == 'below' else 1,
+                               format_func=lambda v: '指定価格以下' if v == 'below' else '指定価格以上', horizontal=True)
+    alert_target = st.number_input('指定価格（日本株は円、米国株はドル）', min_value=0.01,
+                                   value=float(old_target), step=1.0, format='%.2f')
+    ac1, ac2 = st.columns(2)
+    if ac1.button('条件を保存', use_container_width=True):
+        st.session_state.alerts[alert_symbol] = (alert_direction, alert_target)
+        save_preferences()
+        st.rerun()
+    if ac2.button('この銘柄の条件を削除', use_container_width=True):
+        st.session_state.alerts.pop(alert_symbol, None)
+        save_preferences()
+        st.rerun()
+
+for symbol, (direction, target) in st.session_state.alerts.items():
+    if symbol not in symbols:
+        continue
+    unit = '円' if symbol.endswith('.T') else 'ドル'
+    cond = '以下' if direction == 'below' else '以上'
+    if symbol not in prices:
+        st.warning(f'{display_name(symbol)}: 価格取得不可のためアラート判定できません')
+        continue
+    price = prices[symbol][1]
+    hit = price <= target if direction == 'below' else price >= target
+    message = f'{display_name(symbol)}: {target:,.2f}{unit}{cond}（取得した終値 {price:,.2f}{unit}）'
+    if hit:
+        st.warning('🔔 条件に達しました: ' + message)
+    else:
+        st.caption('監視中: ' + message)
 
 selected = st.selectbox('詳細を見る銘柄', symbols)
 if selected in prices:
@@ -154,7 +226,7 @@ if st.button('この銘柄のニュースをAIで分析', disabled=not api_key o
         headlines = '\n'.join(f'- {n["title"]} ({n["published"]}, {n["source"]})' for n in news)
         response = client.responses.create(
             model='gpt-4.1-mini',
-            instructions='あなたは慎重な金融ニュース解説者です。与えられた見出しは未検証であり、記事本文は読んでいません。日本語で、重要ニュースの概要、プラス材料、マイナス材料、不確実性を簡潔に整理してください。見出しから推測できない事実は断定せず、株価変動の原因と断定せず、売買指示や価格予測をしないでください。',
+            instructions='あなたは慎重な金融ニュース解説者です。与えられた見出しは未検証であり記事本文は読んでいません。日本語で「注目ニュース」「好材料」「悪材料」「不確実性」「確認すべき一次情報」の5見出しに整理してください。各ニュースの発表日を考慮し、推測と事実を区別し、ニュースと株価変動の因果関係を断定せず、売買指示や価格予測をしないでください。見出しだけでは判断できない場合はその旨を明記してください。',
             input=f'対象銘柄: {display_name(selected)} ({selected})\nニュース見出し:\n{headlines}'
         )
         st.markdown(response.output_text)
