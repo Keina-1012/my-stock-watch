@@ -1,9 +1,5 @@
-# My Stock Watch v0.8
+# My Stock Watch v0.9
 
-v0.7の銘柄保存・お気に入り・アラート・ニュース分析用プロンプトを維持し、画面最上部にオルカン（eMAXIS Slim 全世界株式（オール・カントリー））の公表基準価額（1万口当たり）と基準日を表示します。
+オルカンの基準価額取得先を商品詳細ページへ変更し、楽天証券の代替取得先を追加。取得時に基準日とファンド名を検証。株価・お気に入り・アラート・ChatGPT連携は維持。
 
-取得元: https://fs.bk.mufg.jp/webasp/mufg/fund/detail/chart/m00355920.html
-
-公表ページの構造変更やアクセス制限で取得できない場合はエラーを表示し、誤った価格を表示しません。市場リアルタイム価格ではありません。
-
-GitHubのapp.pyとrequirements.txtを置き換えてデプロイしてください。既存のブラウザ保存キーは変更していません。
+GitHubのapp.pyとrequirements.txtを置き換えてください。実際のStreamlit CloudからのHTTP取得は未検証です。

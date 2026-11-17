@@ -12,7 +12,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
-st.title('📈 My Stock Watch v0.8')
+st.title('📈 My Stock Watch v0.9')
 st.caption('日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です')
 
 DEFAULT = ['6857.T', '8035.T', '7011.T', '6501.T', 'GOOGL', 'AVGO', 'MSFT', 'VRT', 'NVDA', 'PG']
@@ -240,42 +240,79 @@ def get_news(symbol, limit=6):
 
 # オルカンの基準価額は株価ではなく、原則として営業日ごとに公表されます。
 # 株式ティッカーで代用せず、投資信託そのものの公表値を参照します。
-FUND_URL = 'https://fs.bk.mufg.jp/webasp/mufg/fund/detail/chart/m00355920.html'
+FUND_URL = 'https://fs.bk.mufg.jp/webasp/mufg/fund/detail/m00355920.html'
+FUND_BACKUP_URL = 'https://www.rakuten-sec.co.jp/web/fund/detail/?ID=JP90C000H1T1'
 FUND_NAME = 'eMAXIS Slim 全世界株式（オール・カントリー）'
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def load_all_country_nav():
+
+def _normalize_fund_text(value):
+    import unicodedata
+    value = unicodedata.normalize('NFKC', value)
+    return re.sub(r'\s+', ' ', value)
+
+
+def _parse_fund_nav(page, provider):
     from bs4 import BeautifulSoup
-    response = requests.get(FUND_URL, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, 'html.parser')
-    text = soup.get_text(' ', strip=True)
-    if 'オール・カントリー' not in text or 'Ｓｌｉｍ' not in text and 'Slim' not in text:
-        raise ValueError('取得先のファンド名を確認できません')
-    # 公表値の周辺だけを調べ、他のファンドやランキングの数値を拾わない。
-    match = re.search(r'基準価額\s*[？?]?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,6})\s*円', text)
+    soup = BeautifulSoup(page, 'html.parser')
+    for tag in soup(['script', 'style', 'noscript']):
+        tag.decompose()
+    text = _normalize_fund_text(soup.get_text(' ', strip=True))
+    # ISINを含む公式商品ページのみを使用し、名称の異なる投信を誤認しない。
+    if not ('オール・カントリー' in text and 'Slim' in text and '全世界株式' in text):
+        raise ValueError('ファンド名を確認できません')
+    if provider == '三菱UFJ銀行':
+        match = re.search(r'基準価額\s*[?？:]?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,6})\s*円', text)
+        date_match = re.search(r'基準日\s*[:：]?\s*(20\d{2})[年/.-]\s*(\d{1,2})[月/.-]\s*(\d{1,2})', text)
+    else:
+        # 楽天証券の表示例: 基準価額 | 37,852 円 (11/12)
+        match = re.search(r'基準価額\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,6})\s*円\s*[（(]\s*(\d{1,2})/(\d{1,2})\s*[）)]', text)
+        date_match = None
     if not match:
-        raise ValueError('基準価額を読み取れません（提供元の表示形式が変わった可能性があります）')
+        raise ValueError('基準価額の表示を確認できません')
     nav = int(match.group(1).replace(',', ''))
     if not 1000 <= nav <= 1000000:
         raise ValueError('基準価額が想定範囲外です')
-    date_match = re.search(r'基準日\s*[：:]?\s*(20\d{2})[年/.-]\s*(\d{1,2})[月/.-]\s*(\d{1,2})', text)
-    if not date_match:
-        raise ValueError('公表基準日を確認できません。古い値を最新として表示しないため取得を中止しました')
-    asof = f'{int(date_match.group(1)):04d}-{int(date_match.group(2)):02d}-{int(date_match.group(3)):02d}'
-    return nav, asof
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    if provider == '三菱UFJ銀行':
+        if not date_match:
+            raise ValueError('公表基準日を確認できません')
+        asof_date = datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))).date()
+    else:
+        month, day = int(match.group(2)), int(match.group(3))
+        asof_date = datetime(today.year, month, day).date()
+        if asof_date > today:
+            asof_date = datetime(today.year - 1, month, day).date()
+    if asof_date > today or (today - asof_date).days > 14:
+        raise ValueError('公表基準日が古いか未来の日付です')
+    return nav, asof_date.isoformat()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_all_country_nav():
+    failures = []
+    for provider, url in [('三菱UFJ銀行', FUND_URL), ('楽天証券', FUND_BACKUP_URL)]:
+        try:
+            response = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0 (compatible; MyStockWatch/0.9)'})
+            response.raise_for_status()
+            nav, asof = _parse_fund_nav(response.content, provider)
+            return nav, asof, provider
+        except (requests.RequestException, ValueError, OverflowError) as exc:
+            failures.append(f'{provider}: {type(exc).__name__}')
+    raise ValueError('取得元から有効な基準価額・基準日を確認できません（' + ' / '.join(failures) + '）')
+
 
 st.subheader('🌏 オルカンの基準価額')
-st.caption('eMAXIS Slim 全世界株式（オール・カントリー）｜1万口当たり・円建て。株価のようにリアルタイム更新されません。')
+st.caption('eMAXIS Slim 全世界株式（オール・カントリー）｜1万口当たり・円建て。営業日ごとの公表値です。')
 try:
-    fund_nav, fund_date = load_all_country_nav()
-    st.metric('最新取得できた公表基準価額', f'{fund_nav:,} 円')
-    st.caption(f'基準日: {fund_date} ｜ 取得元: 三菱UFJ銀行のファンド情報')
-    if (datetime.now(timezone(timedelta(hours=9))).date() - datetime.strptime(fund_date, '%Y-%m-%d').date()).days > 5:
-        st.warning('公表基準日が5日以上前です。最新の公表値か提供元で確認してください。')
+    fund_nav, fund_date, fund_source = load_all_country_nav()
+    st.metric('取得できた公表基準価額', f'{fund_nav:,} 円')
+    st.caption(f'基準日: {fund_date} ｜ 取得元: {fund_source}')
+    if (datetime.now(timezone(timedelta(hours=9))).date() - datetime.strptime(fund_date, '%Y-%m-%d').date()).days > 4:
+        st.warning('公表基準日が4日以上前です。最新値かどうか取得元で確認してください。')
 except Exception as exc:
     st.warning(f'オルカンの基準価額を取得できませんでした: {exc}')
-st.link_button('オルカンの公表情報を確認 ↗', FUND_URL)
+st.link_button('三菱UFJ銀行の公表情報を確認 ↗', FUND_URL)
+st.link_button('楽天証券の公表情報を確認 ↗', FUND_BACKUP_URL)
 st.divider()
 
 symbols = sorted(st.session_state.symbols, key=lambda symbol: (symbol not in st.session_state.favorites, st.session_state.symbols.index(symbol)))
