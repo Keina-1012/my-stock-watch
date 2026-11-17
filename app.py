@@ -284,7 +284,19 @@ def _parse_fund_nav(page, provider):
             asof_date = datetime(today.year - 1, month, day).date()
     if asof_date > today or (today - asof_date).days > 14:
         raise ValueError('公表基準日が古いか未来の日付です')
-    return nav, asof_date.isoformat()
+    # 基準価額の直後にある前日比だけを読み、純資産額などの前日比と区別する。
+    change_match = re.match(
+        r'\s*前(?:営業)?日比\s*:?\s*([+\-−]?\s*(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+))\s*円',
+        text[match.end():],
+    )
+    change = change_pct = None
+    if change_match:
+        amount = int(change_match.group(1).replace(',', '').replace(' ', '').replace('−', '-'))
+        previous_nav = nav - amount
+        if previous_nav > 0:
+            change = amount
+            change_pct = amount / previous_nav * 100
+    return nav, asof_date.isoformat(), change, change_pct
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -294,8 +306,8 @@ def load_all_country_nav():
         try:
             response = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0 (compatible; MyStockWatch/0.9)'})
             response.raise_for_status()
-            nav, asof = _parse_fund_nav(response.content, provider)
-            return nav, asof, provider
+            nav, asof, change, change_pct = _parse_fund_nav(response.content, provider)
+            return nav, asof, provider, change, change_pct
         except (requests.RequestException, ValueError, OverflowError) as exc:
             failures.append(f'{provider}: {type(exc).__name__}')
     raise ValueError('取得元から有効な基準価額・基準日を確認できません（' + ' / '.join(failures) + '）')
@@ -304,8 +316,13 @@ def load_all_country_nav():
 st.subheader('🌏 オルカンの基準価額')
 st.caption('eMAXIS Slim 全世界株式（オール・カントリー）｜1万口当たり・円建て。営業日ごとの公表値です。')
 try:
-    fund_nav, fund_date, fund_source = load_all_country_nav()
-    st.metric('取得できた公表基準価額', f'{fund_nav:,} 円')
+    fund_nav, fund_date, fund_source, fund_change, fund_change_pct = load_all_country_nav()
+    delta = None
+    if fund_change is not None:
+        delta = f'{fund_change:+,} 円 ({fund_change_pct:+.2f}%) 前営業日比' if fund_change else '0 円 (0.00%) 前営業日比'
+    st.metric('取得できた公表基準価額', f'{fund_nav:,} 円', delta=delta)
+    if delta is None:
+        st.caption('前営業日比を取得できませんでした。')
     st.caption(f'基準日: {fund_date} ｜ 取得元: {fund_source}')
     if (datetime.now(timezone(timedelta(hours=9))).date() - datetime.strptime(fund_date, '%Y-%m-%d').date()).days > 4:
         st.warning('公表基準日が4日以上前です。最新値かどうか取得元で確認してください。')
