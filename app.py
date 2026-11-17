@@ -14,6 +14,7 @@ import yfinance as yf
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
 st.title('📈 My Stock Watch v0.9')
 st.caption('日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です')
+alert_placeholder = st.empty()
 
 DEFAULT = ['6857.T', '8035.T', '7011.T', '6501.T', 'GOOGL', 'AVGO', 'MSFT', 'VRT', 'NVDA', 'PG']
 COMPANIES = {
@@ -356,6 +357,7 @@ with st.expander('アラートを設定・変更する', expanded=False):
         save_preferences()
         st.rerun()
 
+triggered_alerts = []
 for symbol, (direction, target) in st.session_state.alerts.items():
     if symbol not in symbols:
         continue
@@ -368,9 +370,14 @@ for symbol, (direction, target) in st.session_state.alerts.items():
     hit = price <= target if direction == 'below' else price >= target
     message = f'{display_name(symbol)}: {target:,.2f}{unit}{cond}（取得した終値 {price:,.2f}{unit}）'
     if hit:
-        st.warning('🔔 条件に達しました: ' + message)
+        triggered_alerts.append(message)
     else:
         st.caption('監視中: ' + message)
+
+if triggered_alerts:
+    with alert_placeholder.container():
+        for message in triggered_alerts:
+            st.warning('🔔 条件に達しました: ' + message)
 
 selected = st.selectbox('詳細を見る銘柄', symbols, format_func=lambda symbol: f'{display_name(symbol)} ({symbol})')
 if selected in prices:
