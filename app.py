@@ -12,7 +12,7 @@ import streamlit as st
 import yfinance as yf
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
-st.title('📈 My Stock Watch v0.7')
+st.title('📈 My Stock Watch v0.8')
 st.caption('日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です')
 
 DEFAULT = ['6857.T', '8035.T', '7011.T', '6501.T', 'GOOGL', 'AVGO', 'MSFT', 'VRT', 'NVDA', 'PG']
@@ -237,6 +237,46 @@ def get_news(symbol, limit=6):
         source = item.find('source')
         items.append({'title':title, 'link':link, 'published':published, 'source':source.text if source is not None else ''})
     return items
+
+# オルカンの基準価額は株価ではなく、原則として営業日ごとに公表されます。
+# 株式ティッカーで代用せず、投資信託そのものの公表値を参照します。
+FUND_URL = 'https://fs.bk.mufg.jp/webasp/mufg/fund/detail/chart/m00355920.html'
+FUND_NAME = 'eMAXIS Slim 全世界株式（オール・カントリー）'
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_all_country_nav():
+    from bs4 import BeautifulSoup
+    response = requests.get(FUND_URL, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, 'html.parser')
+    text = soup.get_text(' ', strip=True)
+    if 'オール・カントリー' not in text or 'Ｓｌｉｍ' not in text and 'Slim' not in text:
+        raise ValueError('取得先のファンド名を確認できません')
+    # 公表値の周辺だけを調べ、他のファンドやランキングの数値を拾わない。
+    match = re.search(r'基準価額\s*[？?]?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,6})\s*円', text)
+    if not match:
+        raise ValueError('基準価額を読み取れません（提供元の表示形式が変わった可能性があります）')
+    nav = int(match.group(1).replace(',', ''))
+    if not 1000 <= nav <= 1000000:
+        raise ValueError('基準価額が想定範囲外です')
+    date_match = re.search(r'基準日\s*[：:]?\s*(20\d{2})[年/.-]\s*(\d{1,2})[月/.-]\s*(\d{1,2})', text)
+    if not date_match:
+        raise ValueError('公表基準日を確認できません。古い値を最新として表示しないため取得を中止しました')
+    asof = f'{int(date_match.group(1)):04d}-{int(date_match.group(2)):02d}-{int(date_match.group(3)):02d}'
+    return nav, asof
+
+st.subheader('🌏 オルカンの基準価額')
+st.caption('eMAXIS Slim 全世界株式（オール・カントリー）｜1万口当たり・円建て。株価のようにリアルタイム更新されません。')
+try:
+    fund_nav, fund_date = load_all_country_nav()
+    st.metric('最新取得できた公表基準価額', f'{fund_nav:,} 円')
+    st.caption(f'基準日: {fund_date} ｜ 取得元: 三菱UFJ銀行のファンド情報')
+    if (datetime.now(timezone(timedelta(hours=9))).date() - datetime.strptime(fund_date, '%Y-%m-%d').date()).days > 5:
+        st.warning('公表基準日が5日以上前です。最新の公表値か提供元で確認してください。')
+except Exception as exc:
+    st.warning(f'オルカンの基準価額を取得できませんでした: {exc}')
+st.link_button('オルカンの公表情報を確認 ↗', FUND_URL)
+st.divider()
 
 symbols = sorted(st.session_state.symbols, key=lambda symbol: (symbol not in st.session_state.favorites, st.session_state.symbols.index(symbol)))
 if not symbols:
