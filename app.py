@@ -159,24 +159,26 @@ with st.sidebar:
                 st.session_state.symbols.append(symbol)
                 save_preferences()
                 st.rerun()
-    for symbol in st.session_state.symbols.copy():
-        c1, c2, c3 = st.columns([1, 5, 1])
-        favorite = symbol in st.session_state.favorites
-        if c1.button('★' if favorite else '☆', key=f'fav_{symbol}', help='お気に入りを切り替え'):
-            if favorite:
-                st.session_state.favorites.remove(symbol)
-            else:
-                st.session_state.favorites.append(symbol)
-            save_preferences()
-            st.rerun()
-        c2.write(f'{display_name(symbol)} ({symbol})')
-        if c3.button('✕', key=f'remove_{symbol}'):
-            st.session_state.symbols.remove(symbol)
-            if symbol in st.session_state.favorites:
-                st.session_state.favorites.remove(symbol)
-            st.session_state.alerts.pop(symbol, None)
-            save_preferences()
-            st.rerun()
+    for index, symbol in enumerate(st.session_state.symbols.copy()):
+        if index:
+            st.divider()
+        st.write(f'{display_name(symbol)} ({symbol})')
+        with st.container(horizontal=True, gap='small'):
+            favorite = symbol in st.session_state.favorites
+            if st.button('★' if favorite else '☆', key=f'fav_{symbol}', help='お気に入りを切り替え'):
+                if favorite:
+                    st.session_state.favorites.remove(symbol)
+                else:
+                    st.session_state.favorites.append(symbol)
+                save_preferences()
+                st.rerun()
+            if st.button('✕', key=f'remove_{symbol}', help='銘柄を削除'):
+                st.session_state.symbols.remove(symbol)
+                if symbol in st.session_state.favorites:
+                    st.session_state.favorites.remove(symbol)
+                st.session_state.alerts.pop(symbol, None)
+                save_preferences()
+                st.rerun()
     st.caption('設定はこのブラウザに保存します。別の端末には自動同期されません。')
     status = st.session_state.get('preferences_status')
     if status == 'saving':
