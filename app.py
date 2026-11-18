@@ -1,6 +1,7 @@
 import re
 import json
-from streamlit_local_storage import LocalStorage
+from pathlib import Path
+from uuid import uuid4
 import html
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote
@@ -9,6 +10,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
@@ -44,7 +46,9 @@ def normalize(s):
 
 # 設定はこのブラウザのlocalStorageに保存します。異なる端末には同期しません。
 STORAGE_KEY = 'my_stock_watch_v06_preferences'
-local_store = LocalStorage()
+preferences_storage = components.declare_component(
+    'preferences_storage', path=str(Path(__file__).parent / 'preferences_storage')
+)
 
 def parse_url_settings():
     # v0.5のURLからも移行可能
@@ -58,7 +62,9 @@ def parse_url_settings():
                 alerts[symbol] = (direction, target)
         except (ValueError, TypeError):
             continue
-    return {'symbols': DEFAULT.copy(), 'favorites': favorites, 'alerts': alerts}
+    raw_symbols = st.query_params.get('symbols')
+    symbols = DEFAULT.copy() if raw_symbols is None else raw_symbols.split(',')
+    return sanitize_settings({'symbols': symbols, 'favorites': favorites, 'alerts': alerts})
 
 def sanitize_settings(value):
     if not isinstance(value, dict):
@@ -88,51 +94,56 @@ def current_settings():
             'alerts': {s: [d, t] for s, (d, t) in st.session_state.alerts.items()}}
 
 def save_preferences():
-    st.session_state.settings_changed = True
-    # localStorageへ保存。URLにもバックアップ情報を残す
-    local_store.setItem(STORAGE_KEY, json.dumps(current_settings(), ensure_ascii=False))
-    st.query_params['symbols'] = ','.join(st.session_state.symbols)
-    st.query_params['favorites'] = ','.join(st.session_state.favorites)
-    st.query_params['alerts'] = ','.join(f'{s}:{d}:{t:g}' for s, (d, t) in st.session_state.alerts.items())
+    st.session_state.preferences_pending = {
+        'id': uuid4().hex,
+        'value': json.dumps(current_settings(), ensure_ascii=False),
+    }
+    st.session_state.preferences_status = 'saving'
+
 
 def restore_settings(data):
     st.session_state.symbols = data['symbols']
     st.session_state.favorites = data['favorites']
     st.session_state.alerts = data['alerts']
 
-if 'settings_initialized' not in st.session_state:
-    st.session_state.settings_initialized = False
-    st.session_state.settings_changed = False
-    st.session_state.settings_restored = False
 
-# ブラウザ側コンポーネントは初回読み込みで値が遅れて届く場合があります。
-# 値が届く前にデフォルト設定で上書きしないようにします。
-stored = local_store.getItem(STORAGE_KEY)
-if not st.session_state.settings_initialized:
-    restored = None
-    if isinstance(stored, str) and stored.strip():
+pending = st.session_state.get('preferences_pending')
+loading = 'symbols' not in st.session_state
+command = {'id': 'load'} if loading else pending
+storage_result = preferences_storage(storage_key=STORAGE_KEY, command=command, key='preferences_storage')
+
+if loading:
+    if not storage_result or storage_result.get('id') != 'load':
+        st.caption('ブラウザに保存された設定を読み込んでいます…')
+        st.stop()
+    data = None
+    stored = storage_result.get('value')
+    if isinstance(stored, str):
         try:
-            restored = sanitize_settings(json.loads(stored))
-        except (ValueError, TypeError):
+            value = json.loads(stored)
+            # 旧コンポーネントは保存キーで包んだJSON文字列を格納していた。
+            if isinstance(value, dict) and isinstance(value.get(STORAGE_KEY), str):
+                value = json.loads(value[STORAGE_KEY])
+            elif isinstance(value, str):
+                value = json.loads(value)
+            data = sanitize_settings(value)
+        except ValueError:
             pass
-    if restored is None:
-        restored = parse_url_settings()
-        raw_symbols = st.query_params.get('symbols', '')
-        if raw_symbols:
-            restored['symbols'] = list(dict.fromkeys(s for s in raw_symbols.split(',') if normalize(s) == s))
-            restored['favorites'] = [s for s in restored['favorites'] if s in restored['symbols']]
-            restored['alerts'] = {s: a for s, a in restored['alerts'].items() if s in restored['symbols']}
-    restore_settings(restored)
-    st.session_state.settings_initialized = True
-    st.session_state.settings_restored = restored is not None and isinstance(stored, str) and bool(stored.strip())
-elif not st.session_state.settings_changed and not st.session_state.settings_restored and isinstance(stored, str) and stored.strip():
-    try:
-        data = sanitize_settings(json.loads(stored))
-        if data is not None:
-            restore_settings(data)
-            st.session_state.settings_restored = True
-    except (ValueError, TypeError):
-        pass
+    restore_settings(parse_url_settings() if data is None else data)
+    if not storage_result.get('ok'):
+        st.session_state.preferences_status = 'read_error'
+elif pending and storage_result and storage_result.get('id') == pending['id']:
+    del st.session_state.preferences_pending
+    if storage_result.get('ok'):
+        st.session_state.preferences_status = 'saved'
+        # 既存のURLバックアップも保存内容とそろえる。
+        st.query_params.update({
+            'symbols': ','.join(st.session_state.symbols),
+            'favorites': ','.join(st.session_state.favorites),
+            'alerts': ','.join(f'{s}:{d}:{t}' for s, (d, t) in st.session_state.alerts.items()),
+        })
+    else:
+        st.session_state.preferences_status = 'write_error'
 
 with st.sidebar:
     st.header('ウォッチリスト')
@@ -142,9 +153,12 @@ with st.sidebar:
         if not symbol:
             st.error('銘柄コードの形式を確認してください。')
         elif symbol not in st.session_state.symbols:
-            st.session_state.symbols.append(symbol)
-            save_preferences()
-            st.rerun()
+            if len(st.session_state.symbols) >= 100:
+                st.error('登録できる銘柄は100件までです。')
+            else:
+                st.session_state.symbols.append(symbol)
+                save_preferences()
+                st.rerun()
     for symbol in st.session_state.symbols.copy():
         c1, c2, c3 = st.columns([1, 5, 1])
         favorite = symbol in st.session_state.favorites
@@ -164,6 +178,18 @@ with st.sidebar:
             save_preferences()
             st.rerun()
     st.caption('設定はこのブラウザに保存します。別の端末には自動同期されません。')
+    status = st.session_state.get('preferences_status')
+    if status == 'saving':
+        st.caption('設定を保存しています…')
+    elif status == 'saved':
+        st.caption('設定をこのブラウザに保存しました。')
+    elif status == 'read_error':
+        st.warning('ブラウザの保存データを読み込めませんでした。')
+    elif status == 'write_error':
+        st.warning('このブラウザに設定を保存できませんでした。')
+        if st.button('設定の保存を再試行'):
+            save_preferences()
+            st.rerun()
     st.subheader('💾 設定バックアップ')
     st.download_button('設定をJSONで保存', json.dumps(current_settings(), ensure_ascii=False, indent=2),
                        file_name='my_stock_watch_settings.json', mime='application/json', use_container_width=True)
@@ -345,7 +371,7 @@ with st.expander('アラートを設定・変更する', expanded=False):
     old_direction, old_target = st.session_state.alerts.get(alert_symbol, ('below', 100.0))
     alert_direction = st.radio('通知条件', ['below', 'above'], index=0 if old_direction == 'below' else 1,
                                format_func=lambda v: '指定価格以下' if v == 'below' else '指定価格以上', horizontal=True)
-    alert_target = st.number_input('指定価格（日本株は円、米国株はドル）', min_value=0.01,
+    alert_target = st.number_input('指定価格（日本株は円、米国株はドル）', min_value=0.01, max_value=999_999_999.99,
                                    value=float(old_target), step=1.0, format='%.2f')
     ac1, ac2 = st.columns(2)
     if ac1.button('条件を保存', use_container_width=True):

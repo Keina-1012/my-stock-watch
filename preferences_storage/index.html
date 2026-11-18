@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>設定の保存</title></head>
+<body>
+<script>
+  function send(type, data = {}) {
+    window.parent.postMessage({ isStreamlitMessage: true, type, ...data }, window.location.origin);
+  }
+
+  let lastResult;
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent || event.origin !== window.location.origin ||
+        event.data?.type !== "streamlit:render") {
+      return;
+    }
+    const { storage_key: key, command } = event.data.args;
+    if (!command || command.id === lastResult?.id) {
+      return;
+    }
+
+    let result;
+    try {
+      if (command.id === "load") {
+        result = { id: command.id, ok: true, value: localStorage.getItem(key) };
+      } else {
+        const value = JSON.stringify({ [key]: command.value });
+        localStorage.setItem(key, value);
+        result = { id: command.id, ok: localStorage.getItem(key) === value };
+      }
+    } catch {
+      result = { id: command.id, ok: false };
+    }
+    lastResult = result;
+    send("streamlit:setComponentValue", { value: result, dataType: "json" });
+  });
+
+  send("streamlit:componentReady", { apiVersion: 1 });
+  send("streamlit:setFrameHeight", { height: 0 });
+</script>
+</body>
+</html>
