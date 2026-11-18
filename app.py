@@ -8,6 +8,7 @@ from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
@@ -254,7 +255,7 @@ with st.sidebar:
 @st.cache_data(ttl=300, show_spinner=False)
 def load_price(symbol):
     ticker = yf.Ticker(symbol)
-    # 長期チャート用の日足と、直近の価格確認用の時間足を分ける。
+    # 日足と、直近の価格確認用の時間足を分ける。
     hist = ticker.history(period='1y', interval='1d', auto_adjust=True)
     if hist.empty or hist['Close'].dropna().empty:
         raise ValueError('日足の株価データを取得できませんでした')
@@ -290,6 +291,48 @@ def load_price(symbol):
         age = None
     stale = age is not None and age > timedelta(days=4)
     return hist, latest_price, change, currency, shown_time, source, stale
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_long_chart_closes(symbol):
+    start = (pd.Timestamp.today() - pd.DateOffset(years=3)).date().isoformat()
+    try:
+        history = yf.Ticker(symbol).history(start=start, interval='1d', auto_adjust=True, timeout=10)
+    except Exception:
+        return pd.Series(dtype=float)
+    return history['Close'].dropna() if 'Close' in history else pd.Series(dtype=float)
+
+
+def draw_price_chart(closes, months, currency):
+    closes = closes.sort_index()
+    # 日足の日付は取引所の現地日付のまま表示する。
+    closes.index = closes.index.tz_localize(None)
+    start = closes.index[-1] - pd.DateOffset(months=months)
+    closes = closes.loc[start:]
+    unit = '円' if currency == 'JPY' else '米ドル'
+    fig = go.Figure(go.Scatter(
+        x=closes.index, y=closes,
+        mode='lines+markers',
+        line=dict(color='#3b82f6', width=2),
+        marker=dict(size=5 if len(closes) <= 70 else 3),
+        hovertemplate=f'%{{x|%Y/%m/%d}}<br>%{{y:,.2f}} {unit}<extra></extra>',
+    ))
+    fig.update_layout(
+        height=320, margin=dict(l=8, r=12, t=12, b=8),
+        font=dict(size=13), hoverlabel=dict(font_size=14),
+        hovermode='x', hoverdistance=-1, spikedistance=-1,
+        dragmode=False, showlegend=False,
+    )
+    fig.update_xaxes(
+        fixedrange=True, automargin=True, showgrid=False,
+        showspikes=True, spikemode='across', spikesnap='data',
+        spikecolor='#64748b', spikedash='dot', spikethickness=1,
+    )
+    fig.update_yaxes(fixedrange=True, automargin=True, title_text=unit, tickformat=',~f')
+    st.plotly_chart(fig, use_container_width=True, config={
+        'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False,
+    })
+    st.caption(f'表示データ期間：{closes.index[0]:%Y/%m/%d} ～ {closes.index[-1]:%Y/%m/%d}')
+
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_news(symbol, name, limit=6):
@@ -454,9 +497,16 @@ selected = st.selectbox('詳細を見る銘柄', symbols, format_func=display_na
 if selected in prices:
     hist, price, change, currency, date, source, stale = prices[selected]
     st.caption(f'価格データ日時: {date} ｜ {source}')
-    period = st.radio('チャート期間', ['1か月','3か月','1年'], horizontal=True)
-    days = {'1か月':30,'3か月':90,'1年':365}[period]
-    st.line_chart(hist['Close'].tail(days), y_label=f'調整後終値 ({currency})')
+    periods = {'1か月': 1, '3か月': 3, '1年': 12, '2年': 24, '3年': 36}
+    period = st.radio('チャート期間', list(periods), horizontal=True)
+    closes = hist['Close'].dropna()
+    if periods[period] > 12:
+        long_closes = load_long_chart_closes(selected)
+        if long_closes.empty:
+            st.warning('長期の日足データを取得できませんでした。取得済みの最長1年分を表示します。')
+        else:
+            closes = long_closes
+    draw_price_chart(closes, periods[period], currency)
     st.caption('チャートは日足の調整後終値です。上部の表示価格とは取得間隔が異なる場合があります。')
 
 selected_label = display_name(selected)
