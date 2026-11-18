@@ -12,6 +12,7 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
+from bs4 import BeautifulSoup, ParserRejectedMarkup
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
 st.title('📈 My Stock Watch v0.9')
@@ -32,8 +33,48 @@ COMPANIES = {
     'PG': ('Procter & Gamble (P&G)', '"Procter & Gamble" earnings consumer products pricing'),
 }
 
+@st.cache_data(ttl=86400, max_entries=1024, show_spinner=False)
+def get_company_name(symbol):
+    if symbol in COMPANIES:
+        return COMPANIES[symbol][0]
+
+    names = []
+    try:
+        info = yf.Ticker(symbol).get_info()
+        for key in ('displayName', 'longName', 'shortName'):
+            value = info.get(key)
+            name = value.strip() if isinstance(value, str) else ''
+            if name and name.upper() not in (symbol, symbol.removesuffix('.T')):
+                names.append(name)
+    except Exception:
+        # 名称取得の失敗は株価取得から独立させる。
+        pass
+
+    if symbol.endswith('.T'):
+        for name in names:
+            if re.search(r'[\u3040-\u30ff\u3400-\u9fff]', name):
+                return name
+
+        # yfinanceが日本語名を返さない場合は国内版の商品ページを参照する。
+        try:
+            response = requests.get(f'https://finance.yahoo.co.jp/quote/{quote(symbol, safe="")}', timeout=5)
+            response.raise_for_status()
+            title = BeautifulSoup(response.content, 'html.parser').title
+            if title:
+                match = re.match(rf'(.+?)【{re.escape(symbol[:-2])}】：', title.get_text(strip=True))
+                if match:
+                    name = re.sub(r'^[（(]株[）)]\s*|\s*[（(]株[）)]$', '', match.group(1)).strip()
+                    if name:
+                        return name
+        except (requests.RequestException, ParserRejectedMarkup):
+            pass
+
+    return names[0] if names else None
+
+
 def display_name(symbol):
-    return COMPANIES.get(symbol, (symbol, symbol))[0]
+    name = get_company_name(symbol)
+    return f'{name} ({symbol})' if name else symbol
 
 
 def normalize(s):
@@ -162,7 +203,7 @@ with st.sidebar:
     for index, symbol in enumerate(st.session_state.symbols.copy()):
         if index:
             st.divider()
-        st.write(f'{display_name(symbol)} ({symbol})')
+        st.write(display_name(symbol))
         with st.container(horizontal=True, gap='small'):
             favorite = symbol in st.session_state.favorites
             if st.button('★' if favorite else '☆', key=f'fav_{symbol}', help='お気に入りを切り替え'):
@@ -251,8 +292,11 @@ def load_price(symbol):
     return hist, latest_price, change, currency, shown_time, source, stale
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_news(symbol, limit=6):
-    query = COMPANIES.get(symbol, (symbol, f'{symbol} stock earnings'))[1]
+def get_news(symbol, name, limit=6):
+    if symbol in COMPANIES:
+        query = COMPANIES[symbol][1]
+    else:
+        query = f'{name} {symbol}' if name else symbol
     lang, region, ceid = ('ja', 'JP', 'JP:ja') if symbol.endswith('.T') else ('en', 'US', 'US:en')
     url = f'https://news.google.com/rss/search?q={quote(query)}&hl={lang}&gl={region}&ceid={ceid}'
     response = requests.get(url, timeout=12, headers={'User-Agent':'Mozilla/5.0'})
@@ -281,7 +325,6 @@ def _normalize_fund_text(value):
 
 
 def _parse_fund_nav(page, provider):
-    from bs4 import BeautifulSoup
     soup = BeautifulSoup(page, 'html.parser')
     for tag in soup(['script', 'style', 'noscript']):
         tag.decompose()
@@ -361,7 +404,7 @@ if prices:
     cols = st.columns(min(4, len(prices)))
     for i, (symbol, (hist, price, change, currency, date, source, stale)) in enumerate(prices.items()):
         with cols[i % len(cols)]:
-            st.metric(f'{display_name(symbol)} ({symbol})', f'{price:,.2f} {currency}', f'{change:+.2f}%' if change is not None else None)
+            st.metric(display_name(symbol), f'{price:,.2f} {currency}', f'{change:+.2f}%' if change is not None else None)
             st.caption(f'データ日時: {date} ｜ {source}')
             if stale:
                 st.warning('データが古い可能性があります')
@@ -369,7 +412,7 @@ if prices:
 st.subheader('🔔 株価アラート（閲覧時チェック）')
 st.caption('取得できる最新の価格で判定します（5分足優先・日足にフォールバック）。リアルタイム保証はなく、アプリを閉じている間の通知はありません。')
 with st.expander('アラートを設定・変更する', expanded=False):
-    alert_symbol = st.selectbox('監視する銘柄', symbols, key='alert_symbol', format_func=lambda symbol: f'{display_name(symbol)} ({symbol})')
+    alert_symbol = st.selectbox('監視する銘柄', symbols, key='alert_symbol', format_func=display_name)
     old_direction, old_target = st.session_state.alerts.get(alert_symbol, ('below', 100.0))
     alert_direction = st.radio('通知条件', ['below', 'above'], index=0 if old_direction == 'below' else 1,
                                format_func=lambda v: '指定価格以下' if v == 'below' else '指定価格以上', horizontal=True)
@@ -407,7 +450,7 @@ if triggered_alerts:
         for message in triggered_alerts:
             st.warning('🔔 条件に達しました: ' + message)
 
-selected = st.selectbox('詳細を見る銘柄', symbols, format_func=lambda symbol: f'{display_name(symbol)} ({symbol})')
+selected = st.selectbox('詳細を見る銘柄', symbols, format_func=display_name)
 if selected in prices:
     hist, price, change, currency, date, source, stale = prices[selected]
     st.caption(f'価格データ日時: {date} ｜ {source}')
@@ -416,9 +459,10 @@ if selected in prices:
     st.line_chart(hist['Close'].tail(days), y_label=f'調整後終値 ({currency})')
     st.caption('チャートは日足の調整後終値です。上部の表示価格とは取得間隔が異なる場合があります。')
 
-st.subheader(f'📰 {display_name(selected)} ({selected}) の関連ニュース')
+selected_label = display_name(selected)
+st.subheader(f'📰 {selected_label} の関連ニュース')
 try:
-    news = get_news(selected)
+    news = get_news(selected, get_company_name(selected))
     if not news:
         st.info('ニュースが見つかりませんでした。')
     for n in news:
@@ -431,18 +475,17 @@ except Exception as exc:
 st.subheader('💬 ChatGPTでニュースを詳しく調べる')
 st.caption('APIキー・追加のAPI料金は不要です。質問文をコピーしてChatGPTに貼り付けてください。')
 
-company = display_name(selected)
 headlines = "\n".join(
     f'- {item["title"]}（{item["published"]}、{item["source"]}）\n  URL: {item["link"]}'
     for item in news
 )
 question = (
-    f'{company}（{selected}）について、以下のニュースを起点に最新情報を調査してください。\n'
+    f'{selected_label}について、以下のニュースを起点に最新情報を調査してください。\n'
     'ニュースの発表日と出来事の日付を区別し、可能なら企業IRなどの一次情報を優先して出典URLを示してください。\n'
     '①重要ニュースの要点 ②株価へのプラス材料・マイナス材料 ③まだ不明な点 '
     '④今後の注目イベント、の順に日本語で解説してください。\n'
     'ニュースと株価変動の因果関係は断定せず、記事を確認できない場合はその旨を明記してください。\n\n'
-    f'参考ニュース（見出し・URL。内容は未検証）：\n{headlines if headlines else "ニュースを取得できませんでした。企業名から調査してください。"}'
+    f'参考ニュース（見出し・URL。内容は未検証）：\n{headlines if headlines else "ニュースを取得できませんでした。銘柄名または証券コードから調査してください。"}'
 )
 st.write('**この銘柄のニュースをまとめて分析**')
 st.code(question, language=None)
@@ -454,7 +497,7 @@ if news:
         for index, item in enumerate(news):
             st.markdown(f'**{index + 1}. {item["title"]}**')
             article_question = (
-                f'{company}（{selected}）に関する次の記事を詳しく調査してください。\n'
+                f'{selected_label}に関する次の記事を詳しく調査してください。\n'
                 f'見出し: {item["title"]}\n掲載日時: {item["published"]}\n'
                 f'掲載元: {item["source"]}\nURL: {item["link"]}\n\n'
                 '記事の内容と一次情報を確認できる範囲で調べ、事実・推測を分けて、'
