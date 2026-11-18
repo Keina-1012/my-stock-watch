@@ -328,7 +328,7 @@ def draw_price_chart(closes, months, currency):
         spikecolor='#64748b', spikedash='dot', spikethickness=1,
     )
     fig.update_yaxes(fixedrange=True, automargin=True, title_text=unit, tickformat=',~f')
-    st.plotly_chart(fig, use_container_width=True, config={
+    st.plotly_chart(fig, config={
         'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False,
     })
     st.caption(f'表示データ期間：{closes.index[0]:%Y/%m/%d} ～ {closes.index[-1]:%Y/%m/%d}')
