@@ -1,0 +1,301 @@
+:root {
+    --mw-bg: #0B1018;
+    --mw-panel: #192633;
+    --mw-edge: #314355;
+    --mw-text: #E8EDF2;
+    --mw-muted: #94A3B8;
+    --mw-amber: #F0A84B;
+    --mw-cyan: #69BBD0;
+    --mw-up: #78D5A9;
+    --mw-down: #F69BA5;
+}
+
+.mw-hero,
+.mw-fund,
+.mw-stock-card,
+.mw-news,
+.mw-notice {
+    box-sizing: border-box;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.mw-hero h1,
+.mw-fund h2,
+.mw-stock-card h3,
+.mw-news h3 {
+    color: var(--mw-text);
+    margin: 0;
+    padding: 0;
+}
+
+.mw-hero p,
+.mw-fund p,
+.mw-stock-card p,
+.mw-news p,
+.mw-watch-name {
+    margin: 0;
+}
+
+.mw-hero {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: clamp(168px, 18vw, 224px);
+    padding: clamp(1.25rem, 3.4vw, 3rem);
+    border: 1px solid var(--mw-edge);
+    border-radius: 12px;
+    background:
+        linear-gradient(90deg, #0B1018 2%, rgba(11, 16, 24, .94) 32%, rgba(11, 16, 24, .42) 70%, rgba(11, 16, 24, .18)),
+        url("./app/static/refinery.webp") center 55% / cover no-repeat,
+        linear-gradient(125deg, #172739, #0B1018 58%, #3A2C21);
+}
+
+.mw-hero h1 {
+    font-size: clamp(2rem, 4.6vw, 3.45rem);
+    font-weight: 740;
+    line-height: 1.04;
+    letter-spacing: -.045em;
+}
+
+.mw-hero p {
+    margin-top: .8rem;
+    max-width: 34rem;
+    color: #C9D5E2;
+    font-size: .94rem;
+    line-height: 1.65;
+}
+
+.mw-fund,
+.mw-stock-card,
+.st-key-watchlist-items [class*="st-key-fav_"] button {
+    color: var(--mw-amber);
+}
+
+.mw-news {
+    background: var(--mw-panel);
+    border: 1px solid var(--mw-edge);
+    border-radius: 10px;
+}
+
+.mw-fund {
+    border-left: 3px solid var(--mw-amber);
+    padding: clamp(1rem, 2.5vw, 1.65rem);
+}
+
+.mw-fund-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, .9fr);
+    gap: 1rem 1.5rem;
+    align-items: center;
+}
+
+.mw-fund h2 {
+    font-size: clamp(1.25rem, 2.2vw, 1.55rem);
+    line-height: 1.25;
+    margin-bottom: .45rem;
+}
+
+.mw-muted,
+.mw-stock-card footer {
+    color: var(--mw-muted);
+    font-size: .88rem;
+    line-height: 1.65;
+}
+
+.mw-fund-quote {
+    border-left: 1px solid var(--mw-edge);
+    padding-left: 1.5rem;
+}
+
+.mw-fund-value,
+.mw-stock-price {
+    color: var(--mw-text);
+    font-variant-numeric: tabular-nums;
+    font-weight: 720;
+    letter-spacing: -.035em;
+    line-height: 1.16;
+}
+
+.mw-fund .mw-fund-value {
+    font-size: clamp(2.2rem, 4.5vw, 3.15rem);
+    margin: .12rem 0 .25rem;
+}
+
+.mw-fund-value span,
+.mw-stock-price span {
+    color: var(--mw-muted);
+    font-size: .95rem;
+    letter-spacing: 0;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.mw-fund-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 1.25rem;
+    padding-top: .42rem;
+    margin-top: .75rem;
+    border-top: 1px solid var(--mw-edge);
+}
+
+.mw-fund-links a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    font-size: .89rem;
+}
+
+.mw-fund a,
+.mw-news a {
+    color: var(--mw-cyan);
+    text-underline-offset: .2em;
+}
+
+.mw-fund a:focus-visible,
+.mw-news a:focus-visible {
+    outline: 2px solid var(--mw-amber);
+    outline-offset: 3px;
+    border-radius: 2px;
+}
+
+.mw-notice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem 1rem;
+    align-items: baseline;
+    color: #F5D8AB;
+    background: #2A2119;
+    border: 1px solid #62482B;
+    border-left: 3px solid var(--mw-amber);
+    border-radius: 8px;
+    padding: .8rem 1rem;
+    font-size: .93rem;
+    line-height: 1.55;
+}
+
+.mw-alert strong {
+    color: var(--mw-amber);
+    white-space: nowrap;
+}
+
+.mw-stock-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 212px), 1fr));
+    gap: .8rem;
+}
+
+.mw-stock-card {
+    display: grid;
+    grid-template-rows: 1fr auto auto auto;
+    gap: .32rem;
+    padding: .95rem 1rem;
+}
+
+.mw-stock-card h3 {
+    font-size: 1.04rem;
+    font-weight: 680;
+    line-height: 1.36;
+}
+
+.mw-ticker {
+    color: var(--mw-cyan);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: .83rem;
+    letter-spacing: .025em;
+}
+
+.mw-stock-card .mw-stock-price {
+    margin-top: .45rem;
+    font-size: clamp(1.48rem, 2.25vw, 1.95rem);
+}
+
+.mw-move {
+    color: var(--mw-muted);
+    font-size: .86rem;
+}
+
+.mw-move strong {
+    margin-left: .36rem;
+    color: var(--mw-text);
+    font-size: .96rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.mw-move .mw-up { color: var(--mw-up); }
+.mw-move .mw-down { color: var(--mw-down); }
+.mw-stock-stale { color: var(--mw-amber); }
+
+.mw-stock-card footer {
+    border-top: 1px solid var(--mw-edge);
+    margin-top: .45rem;
+    padding-top: .48rem;
+}
+
+.mw-stock-timestamp {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: .35rem;
+}
+
+.mw-stock-timestamp span {
+    min-width: 0;
+}
+
+.mw-watch-name {
+    color: var(--mw-text);
+    font-weight: 620;
+    overflow-wrap: anywhere;
+}
+
+.mw-watch-divider {
+    margin: .35rem 0;
+    border: 0;
+    border-top: 1px solid var(--mw-edge);
+}
+
+/* Streamlit adds the st-key-* class for widgets with user-defined keys. */
+.st-key-watchlist-items :is([class*="st-key-fav_"], [class*="st-key-remove_"]) button {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.mw-news {
+    padding: .85rem 1rem;
+}
+
+.mw-news h3 {
+    font-size: 1rem;
+    line-height: 1.5;
+}
+
+.mw-news .mw-muted {
+    margin-top: .32rem;
+}
+
+@media (max-width: 640px) {
+    .mw-hero {
+        min-height: 156px;
+        background-position: center, 64% center, center;
+        background-image:
+            linear-gradient(90deg, rgba(11, 16, 24, .98), rgba(11, 16, 24, .9) 45%, rgba(11, 16, 24, .59)),
+            url("./app/static/refinery.webp"),
+            linear-gradient(125deg, #172739, #0B1018 58%, #3A2C21);
+    }
+
+    .mw-fund-summary,
+    .mw-stock-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .mw-fund-quote {
+        padding: .65rem 0 0;
+        border-left: 0;
+        border-top: 1px solid var(--mw-edge);
+    }
+
+    .mw-stock-card .mw-stock-price {
+        font-size: 1.7rem;
+    }
+}

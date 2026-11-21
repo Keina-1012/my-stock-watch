@@ -3,8 +3,9 @@ import json
 from pathlib import Path
 from uuid import uuid4
 import html
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import xml.etree.ElementTree as ET
 
 import pandas as pd
@@ -16,8 +17,13 @@ import yfinance as yf
 from bs4 import BeautifulSoup, ParserRejectedMarkup
 
 st.set_page_config(page_title='My Stock Watch', page_icon='📈', layout='wide')
-st.title('📈 My Stock Watch v0.9')
-st.caption('日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です')
+st.html(Path(__file__).with_name('dashboard.css'))
+st.html("""
+<header class="mw-hero">
+    <h1>My Stock Watch</h1>
+    <p>日本株・米国株の株価と関連ニュースをまとめて確認｜投資判断の参考情報です</p>
+</header>
+""")
 alert_placeholder = st.empty()
 
 DEFAULT = ['6857.T', '8035.T', '7011.T', '6501.T', 'GOOGL', 'AVGO', 'MSFT', 'VRT', 'NVDA', 'PG']
@@ -152,7 +158,8 @@ def restore_settings(data):
 pending = st.session_state.get('preferences_pending')
 loading = 'symbols' not in st.session_state
 command = {'id': 'load'} if loading else pending
-storage_result = preferences_storage(storage_key=STORAGE_KEY, command=command, key='preferences_storage')
+with st.sidebar:
+    storage_result = preferences_storage(storage_key=STORAGE_KEY, command=command, key='preferences_storage')
 
 if loading:
     if not storage_result or storage_result.get('id') != 'load':
@@ -201,26 +208,27 @@ with st.sidebar:
                 st.session_state.symbols.append(symbol)
                 save_preferences()
                 st.rerun()
-    for index, symbol in enumerate(st.session_state.symbols.copy()):
-        if index:
-            st.divider()
-        st.write(display_name(symbol))
-        with st.container(horizontal=True, gap='small'):
-            favorite = symbol in st.session_state.favorites
-            if st.button('★' if favorite else '☆', key=f'fav_{symbol}', help='お気に入りを切り替え'):
-                if favorite:
-                    st.session_state.favorites.remove(symbol)
-                else:
-                    st.session_state.favorites.append(symbol)
-                save_preferences()
-                st.rerun()
-            if st.button('✕', key=f'remove_{symbol}', help='銘柄を削除'):
-                st.session_state.symbols.remove(symbol)
-                if symbol in st.session_state.favorites:
-                    st.session_state.favorites.remove(symbol)
-                st.session_state.alerts.pop(symbol, None)
-                save_preferences()
-                st.rerun()
+    with st.container(key='watchlist-items', gap='small'):
+        for index, symbol in enumerate(st.session_state.symbols.copy()):
+            if index:
+                st.html('<hr class="mw-watch-divider">')
+            st.html(f'<p class="mw-watch-name">{html.escape(display_name(symbol))}</p>')
+            with st.container(horizontal=True, gap='small'):
+                favorite = symbol in st.session_state.favorites
+                if st.button('★' if favorite else '☆', key=f'fav_{symbol}', help='お気に入りを切り替え'):
+                    if favorite:
+                        st.session_state.favorites.remove(symbol)
+                    else:
+                        st.session_state.favorites.append(symbol)
+                    save_preferences()
+                    st.rerun()
+                if st.button('✕', key=f'remove_{symbol}', help='銘柄を削除'):
+                    st.session_state.symbols.remove(symbol)
+                    if symbol in st.session_state.favorites:
+                        st.session_state.favorites.remove(symbol)
+                    st.session_state.alerts.pop(symbol, None)
+                    save_preferences()
+                    st.rerun()
     st.caption('設定はこのブラウザに保存します。別の端末には自動同期されません。')
     status = st.session_state.get('preferences_status')
     if status == 'saving':
@@ -312,23 +320,28 @@ def draw_price_chart(closes, months, currency):
     fig = go.Figure(go.Scatter(
         x=closes.index, y=closes,
         mode='lines+markers',
-        line=dict(color='#3b82f6', width=2),
+        line=dict(color='#69BBD0', width=2),
         marker=dict(size=5 if len(closes) <= 70 else 3),
         hovertemplate=f'%{{x|%Y/%m/%d}}<br>%{{y:,.2f}} {unit}<extra></extra>',
     ))
     fig.update_layout(
-        height=320, margin=dict(l=8, r=12, t=12, b=8),
-        font=dict(size=13), hoverlabel=dict(font_size=14),
+        template='plotly_dark', paper_bgcolor='#192633', plot_bgcolor='#192633',
+        height=320, margin=dict(l=12, r=16, t=16, b=12),
+        font=dict(color='#E8EDF2', size=13),
+        hoverlabel=dict(bgcolor='#0B1018', bordercolor='#69BBD0', font=dict(color='#E8EDF2', size=15)),
         hovermode='x', hoverdistance=-1, spikedistance=-1,
         dragmode=False, showlegend=False,
     )
     fig.update_xaxes(
         fixedrange=True, automargin=True, showgrid=False,
         showspikes=True, spikemode='across', spikesnap='data',
-        spikecolor='#64748b', spikedash='dot', spikethickness=1,
+        spikecolor='#F0A84B', spikedash='dot', spikethickness=1,
     )
-    fig.update_yaxes(fixedrange=True, automargin=True, title_text=unit, tickformat=',~f')
-    st.plotly_chart(fig, config={
+    fig.update_yaxes(
+        fixedrange=True, automargin=True, title_text=unit, tickformat=',~f',
+        gridcolor='#304150', zeroline=False,
+    )
+    st.plotly_chart(fig, theme=None, config={
         'displayModeBar': False, 'scrollZoom': False, 'doubleClick': False,
     })
     st.caption(f'表示データ期間：{closes.index[0]:%Y/%m/%d} ～ {closes.index[-1]:%Y/%m/%d}')
@@ -416,19 +429,41 @@ def load_all_country_nav():
     raise ValueError('取得元から有効な基準価額・基準日を確認できません（' + ' / '.join(failures) + '）')
 
 
-st.subheader('🌏 オルカンの基準価額')
-st.caption('eMAXIS Slim 全世界株式（オール・カントリー）｜1万口当たり・円建て。営業日ごとの公表値です。')
-try:
-    fund_nav, fund_date, fund_source = load_all_country_nav()
-    st.metric('取得できた公表基準価額', f'{fund_nav:,} 円')
-    st.caption(f'基準日: {fund_date} ｜ 取得元: {fund_source}')
-    if (datetime.now(timezone(timedelta(hours=9))).date() - datetime.strptime(fund_date, '%Y-%m-%d').date()).days > 4:
-        st.warning('公表基準日が4日以上前です。最新値かどうか取得元で確認してください。')
-except Exception as exc:
-    st.warning(f'オルカンの基準価額を取得できませんでした: {exc}')
-st.link_button('三菱UFJ銀行の公表情報を確認 ↗', FUND_URL)
-st.link_button('楽天証券の公表情報を確認 ↗', FUND_BACKUP_URL)
-st.divider()
+def render_fund_card():
+    try:
+        fund_nav, fund_date, fund_source = load_all_country_nav()
+        summary = f"""
+            <div class="mw-fund-quote">
+                <p class="mw-muted">公表基準価額</p>
+                <p class="mw-fund-value">{fund_nav:,} <span>円</span></p>
+                <p class="mw-muted">基準日 <time datetime="{html.escape(fund_date)}">{html.escape(fund_date)}</time>
+                    <span>｜ 取得元 {html.escape(fund_source)}</span></p>
+            </div>
+        """
+        if (datetime.now(timezone(timedelta(hours=9))).date() - datetime.strptime(fund_date, '%Y-%m-%d').date()).days > 4:
+            summary += '<p class="mw-notice" role="status">公表基準日が4日以上前です。最新値かどうか取得元で確認してください。</p>'
+    except Exception as exc:
+        summary = f'<p class="mw-notice" role="status">オルカンの基準価額を取得できませんでした: {html.escape(str(exc))}</p>'
+
+    st.html(f"""
+        <section class="mw-fund" aria-labelledby="fund-heading">
+            <div class="mw-fund-summary">
+                <div>
+                    <h2 id="fund-heading">オルカンの基準価額</h2>
+                    <p class="mw-muted">{FUND_NAME}</p>
+                    <p class="mw-muted">1万口当たり・円建て。営業日ごとの公表値です。</p>
+                </div>
+                {summary}
+            </div>
+            <div class="mw-fund-links">
+                <a href="{FUND_URL}" target="_blank" rel="noopener noreferrer">三菱UFJ銀行の公表情報 ↗</a>
+                <a href="{FUND_BACKUP_URL}" target="_blank" rel="noopener noreferrer">楽天証券の公表情報 ↗</a>
+            </div>
+        </section>
+    """)
+
+
+render_fund_card()
 
 symbols = sorted(st.session_state.symbols, key=lambda symbol: (symbol not in st.session_state.favorites, st.session_state.symbols.index(symbol)))
 if not symbols:
@@ -443,14 +478,39 @@ with st.spinner('株価を取得しています…'):
         except Exception as exc:
             st.warning(f'{symbol}: データ取得に失敗しました（{exc}）')
 
+def render_stock_cards(prices):
+    cards = []
+    for symbol, (_, price, change, currency, date, source, stale) in prices.items():
+        name = get_company_name(symbol)
+        unit = '円' if currency == 'JPY' else '米ドル'
+        change_color = ''
+        change_label = '—'
+        if change is not None:
+            change_color = ' mw-up' if change > 0 else ' mw-down' if change < 0 else ''
+            change_label = f'{change:+.2f}%'
+        ticker = f'<p class="mw-ticker">{html.escape(symbol)}</p>' if name else ''
+        stale_note = '<p class="mw-stock-stale">データが古い可能性があります</p>' if stale else ''
+        cards.append(f"""
+            <article class="mw-stock-card">
+                <header>
+                    <h3>{html.escape(name or symbol)}</h3>
+                    {ticker}
+                </header>
+                <p class="mw-stock-price">{price:,.2f} <span>{unit}</span></p>
+                <p class="mw-move">前日比 <strong class="{change_color.strip()}">{change_label}</strong></p>
+                <footer>
+                    <p class="mw-stock-timestamp"><span>データ日時</span><span>{html.escape(date)}</span></p>
+                    <p>{html.escape(source)}</p>
+                    {stale_note}
+                </footer>
+            </article>
+        """)
+    st.html('<div class="mw-stock-grid">' + ''.join(cards) + '</div>')
+
+
+st.subheader('株価一覧')
 if prices:
-    cols = st.columns(min(4, len(prices)))
-    for i, (symbol, (hist, price, change, currency, date, source, stale)) in enumerate(prices.items()):
-        with cols[i % len(cols)]:
-            st.metric(display_name(symbol), f'{price:,.2f} {currency}', f'{change:+.2f}%' if change is not None else None)
-            st.caption(f'データ日時: {date} ｜ {source}')
-            if stale:
-                st.warning('データが古い可能性があります')
+    render_stock_cards(prices)
 
 st.subheader('🔔 株価アラート（閲覧時チェック）')
 st.caption('取得できる最新の価格で判定します（5分足優先・日足にフォールバック）。リアルタイム保証はなく、アプリを閉じている間の通知はありません。')
@@ -491,8 +551,10 @@ for symbol, (direction, target) in st.session_state.alerts.items():
 if triggered_alerts:
     with alert_placeholder.container():
         for message in triggered_alerts:
-            st.warning('🔔 条件に達しました: ' + message)
+            st.html(f'<div class="mw-notice mw-alert" role="status"><strong>株価アラート</strong>'
+                    f'<span>条件に達しました: {html.escape(message)}</span></div>')
 
+st.subheader('株価チャート')
 selected = st.selectbox('詳細を見る銘柄', symbols, format_func=display_name)
 if selected in prices:
     hist, price, change, currency, date, source, stale = prices[selected]
@@ -509,15 +571,37 @@ if selected in prices:
     draw_price_chart(closes, periods[period], currency)
     st.caption('チャートは日足の調整後終値です。上部の表示価格とは取得間隔が異なる場合があります。')
 
+def render_news_item(item):
+    title = html.escape(item['title'])
+    try:
+        link = urlsplit(item['link'])
+        if link.scheme in ('http', 'https') and link.netloc:
+            title = f'<a href="{html.escape(link.geturl())}" target="_blank" rel="noopener noreferrer">{title}</a>'
+    except ValueError:
+        pass
+
+    published = item['published']
+    try:
+        published = parsedate_to_datetime(published).strftime('%Y/%m/%d %H:%M %Z').strip()
+    except (ValueError, OverflowError):
+        pass
+    metadata = ' ｜ '.join(html.escape(field) for field in (item['source'], published) if field)
+    st.html(f"""
+        <article class="mw-news">
+            <h3>{title}</h3>
+            <p class="mw-muted">{metadata}</p>
+        </article>
+    """)
+
+
 selected_label = display_name(selected)
 st.subheader(f'📰 {selected_label} の関連ニュース')
 try:
     news = get_news(selected, get_company_name(selected))
     if not news:
         st.info('ニュースが見つかりませんでした。')
-    for n in news:
-        st.markdown(f'**[{n["title"]}]({n["link"]})**')
-        st.caption(f'{n["source"]} ｜ {n["published"]}')
+    for item in news:
+        render_news_item(item)
 except Exception as exc:
     news = []
     st.warning(f'ニュースの取得に失敗しました: {exc}')
